@@ -55,8 +55,8 @@ sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bis
 sudo bash -c 'bash <(curl -s https://build-scripts.immortalwrt.org/init_build_environment.sh)'
 
 #  拉取源码
-git clone https://github.com/pbs05/ponwrt.git
-cd ponwrt
+git clone https://github.com/destan19/ponwrt-fcm.git
+cd ponwrt-fcm
 
 #  更新并安装 feeds（软件包源）
 ./scripts/feeds update -a
