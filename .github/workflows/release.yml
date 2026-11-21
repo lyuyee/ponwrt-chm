@@ -33,7 +33,23 @@ jobs:
           - an7581
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout source from destan19/ponwrt-fcm
+        uses: actions/checkout@v6
+        with:
+          repository: destan19/ponwrt-fcm
+          ref: ponwrt26.10
+
+      - name: Verify source origin and FCM feature files
+        run: |
+          echo "=== source repository / commit ==="
+          git remote get-url origin
+          git rev-parse HEAD
+          git log -1 --format='%H %ci %s'
+          echo "=== FCM / FWX related files in checked-out source ==="
+          list=$(find . -path './.git' -prune -o -type f \( -iname '*fwx*' -o -iname '*fanchm*' -o -iname '*appfilter*' \) -print | head -40)
+          if [ -n "$list" ]; then printf '%s\n' "$list"; else echo "  (none found)"; fi
+          echo "=== feeds.conf.default ==="
+          cat feeds.conf.default
 
       - name: Free build space
         run: |
@@ -99,6 +115,8 @@ jobs:
           make defconfig
           echo "--- enabled device profiles ---"
           grep -E '^CONFIG_TARGET.*DEVICE.*=y' .config || true
+          echo "--- FCM feature packages enabled in .config ---"
+          grep -iE '^CONFIG_PACKAGE_.*(fwx|fanchm|oaf|appfilter)' .config || echo "  (none enabled)"
 
       - name: Download sources
         run: make download -j"$(nproc)"
