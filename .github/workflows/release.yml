@@ -224,17 +224,21 @@ jobs:
       - name: Build ${{ matrix.target }}
         run: |
           set +e
-          echo "=== stage 1/2: compile kmod-fwx alone, full verbose log ==="
-          make -j"$(nproc)" V=s package/fcm/fwx/compile > fwx_compile.log 2>&1
+          echo "=== full world build (same path as v1/v3) ==="
+          make -j"$(nproc)"
           rc=$?
           if [ "$rc" -ne 0 ]; then
-            echo "=== FWX COMPILE FAILED rc=$rc : exact errors below ==="
-            echo "--- error lines from fwx_compile.log ---"
+            echo "=== FULL BUILD FAILED rc=$rc ==="
+            echo "=== re-run kmod-fwx alone with V=s (host tools + kernel now ready) ==="
+            make package/fcm/fwx/clean >/dev/null 2>&1 || true
+            make -j1 V=s package/fcm/fwx/compile > fwx_compile.log 2>&1
+            rc2=$?
+            echo "--- exact compiler errors (fwx retry rc=$rc2) ---"
             grep -nE 'error:|fatal error|Error [0-9]+|undefined|MODPOST|No such file|No rule to make|implicit declaration|cc1:' fwx_compile.log | tail -100 || true
             echo "--- last 150 lines of fwx_compile.log ---"
             tail -150 fwx_compile.log
             {
-              echo "=== rc=$rc ===";
+              echo "=== full build rc=$rc / fwx retry rc=$rc2 ===";
               echo "--- error lines ---";
               grep -nE 'error:|fatal error|Error [0-9]+|undefined|MODPOST|No such file|No rule to make|implicit declaration|cc1:' fwx_compile.log | tail -100;
               echo "--- tail 400 ---";
@@ -242,25 +246,7 @@ jobs:
             } > fwx_errors.txt
             exit "$rc"
           fi
-          echo "--- fwx.ko produced ---"
-          find build_dir -type f -name 'fwx.ko' -exec ls -lh {} \; || true
-          echo "=== stage 2/2: full world build ==="
-          make -j"$(nproc)"
-          rc2=$?
-          if [ "$rc2" -ne 0 ]; then
-            echo "=== FULL BUILD FAILED rc=$rc2 ==="
-            if [ -d logs ]; then
-              echo "--- fwx/fcm log files ---"
-              find logs -type f | grep -iE 'fwx|fcm' | head -40 || true
-              for f in $(find logs -type f | grep -iE 'fwx|fcm' | head -12); do
-                echo "----- $f -----"
-                tail -300 "$f"
-              done
-            else
-              echo "  (no logs/ directory)"
-            fi
-            exit "$rc2"
-          fi
+          echo "=== full build OK ==="
 
       - name: Verify FCM packages were actually built
         run: |
