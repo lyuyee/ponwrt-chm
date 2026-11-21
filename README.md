@@ -60,8 +60,8 @@ sudo bash -c 'bash <(curl -s https://build-scripts.immortalwrt.org/init_build_en
 
 
 #  Clone the source code
-git clone https://github.com/pbs05/ponwrt.git
-cd ponwrt
+git clone https://github.com/destan19/ponwrt-fcm.git
+cd ponwrt-fcm
 
 
 #  Update and install feeds (package sources)
