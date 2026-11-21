@@ -1,4 +1,4 @@
-name: Release PonWrt-CHM (XG-040G-MD)
+name: Release PonWrt-FCM (XG-040G-MD)
 
 on:
   workflow_dispatch:
@@ -39,17 +39,68 @@ jobs:
           repository: destan19/ponwrt-fcm
           ref: ponwrt26.10
 
-      - name: Verify source origin and FCM feature files
+      - name: Verify upstream source origin (baseline)
         run: |
-          echo "=== source repository / commit ==="
+          echo "=== upstream source repository / commit ==="
           git remote get-url origin
           git rev-parse HEAD
           git log -1 --format='%H %ci %s'
-          echo "=== FCM / FWX related files in checked-out source ==="
-          list=$(find . -path './.git' -prune -o -type f \( -iname '*fwx*' -o -iname '*fanchm*' -o -iname '*appfilter*' \) -print | head -40)
-          if [ -n "$list" ]; then printf '%s\n' "$list"; else echo "  (none found)"; fi
-          echo "=== feeds.conf.default ==="
-          cat feeds.conf.default
+          echo "=== FCM / FWX files in upstream tree (expected: none) ==="
+          list=$(find . -path './.git' -prune -o -type f \( -iname '*fwx*' -o -iname '*fanchm*' \) -print | head -20)
+          if [ -n "$list" ]; then printf '%s\n' "$list"; else echo "  (none found - upstream ships no FCM code)"; fi
+
+      - name: Import FanchmWrt official FCM packages
+        run: |
+          set -e
+          echo "=== 1) sparse-clone official FanchmWrt source (fanchmwrt-25.12.6) ==="
+          rm -rf /tmp/fanchmwrt-src
+          git clone --depth 1 --filter=blob:none --sparse \
+            --branch fanchmwrt-25.12.6 \
+            https://github.com/fanchmwrt/fanchmwrt.git /tmp/fanchmwrt-src
+          git -C /tmp/fanchmwrt-src sparse-checkout set \
+            package/fcm/fwx package/fcm/fwxd package/fcm/libfwx_common
+          echo "  official source HEAD: $(git -C /tmp/fanchmwrt-src rev-parse HEAD)"
+          echo "=== 2) copy core FCM packages into build tree ==="
+          mkdir -p package/fcm
+          for p in fwx fwxd libfwx_common; do
+            cp -a "/tmp/fanchmwrt-src/package/fcm/$p" package/fcm/
+          done
+          echo "  package/fcm files: $(find package/fcm -type f | wc -l)"
+          find package/fcm -maxdepth 2 -name Makefile -print | sort
+
+          echo "=== 3) clone official fanchmwrt-packages feed (local src-link) ==="
+          rm -rf /tmp/fanchmwrt-packages
+          git clone --depth 1 \
+            https://github.com/fanchmwrt/fanchmwrt-packages.git /tmp/fanchmwrt-packages
+          echo "  official feed HEAD: $(git -C /tmp/fanchmwrt-packages rev-parse HEAD)"
+          # luci-app-fwx-fastnat needs kmod-shortcut-fe (extra kernel module, not part of
+          # the requested features); drop it to avoid a hard dependency failure.
+          rm -rf /tmp/fanchmwrt-packages/luci-app-fwx-fastnat
+          echo "  feed apps: $(find /tmp/fanchmwrt-packages -maxdepth 1 -type d -name 'luci-app-fwx-*' | wc -l)"
+          find /tmp/fanchmwrt-packages -maxdepth 1 -type d -name 'luci-app-fwx-*' -printf '%f\n' | sort
+          echo "src-link fanchmwrt /tmp/fanchmwrt-packages" >> feeds.conf.default
+          echo "=== feeds.conf.default (tail) ==="
+          tail -4 feeds.conf.default
+
+          echo "=== 4) patch fwxd Makefile: drop deps missing on PonWrt ==="
+          python3 - <<'PY'
+          p = "package/fcm/fwxd/Makefile"
+          s = open(p, encoding="utf-8").read()
+          before = [l.strip() for l in s.splitlines() if l.strip().startswith("DEPENDS:=")]
+          # libmosquitto is named libmosquitto-nossl / -ssl in immortalwrt/packages;
+          # fwxd does not link against mosquitto at all, so the dep is spurious here.
+          # rpcd-mod-iwinfo is not provided by this tree either (conditional dep).
+          s = s.replace("+libmosquitto ", "")
+          s = s.replace("+PACKAGE_rpcd:rpcd-mod-iwinfo ", "")
+          open(p, "w", encoding="utf-8").write(s)
+          after = [l.strip() for l in s.splitlines() if l.strip().startswith("DEPENDS:=")]
+          print("  DEPENDS before:", before)
+          print("  DEPENDS after :", after)
+          PY
+
+          echo "=== 5) kernel / source baseline ==="
+          grep -n 'KERNEL_PATCHVER' target/linux/airoha/Makefile || true
+          echo "  import complete"
 
       - name: Free build space
         run: |
@@ -84,6 +135,10 @@ jobs:
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          echo "=== installed fanchmwrt feed packages ==="
+          find package/feeds/fanchmwrt -maxdepth 1 -mindepth 1 -type d -printf '%f\n' 2>/dev/null | sort || true
+          echo "=== local FCM core packages ==="
+          find package/fcm -maxdepth 1 -mindepth 1 -type d -printf '%f\n' | sort
 
       - name: Load repository signing key
         env:
@@ -95,11 +150,38 @@ jobs:
             openssl ec -in private-key.pem -pubout -out public-key.pem
           fi
 
-      - name: Configure ${{ matrix.target }} (XG-040G-MD only)
+      - name: Configure ${{ matrix.target }} (XG-040G-MD + FCM)
         run: |
           ./scripts/kconfig.pl + \
             "configs/${{ matrix.target }}.config" \
             configs/release.config > .config
+          cat >> .config <<'EOF'
+
+          # ---- FanchmWrt official FCM feature packages ----
+          CONFIG_PACKAGE_kmod-fwx=y
+          CONFIG_PACKAGE_fwxd=y
+          CONFIG_PACKAGE_libfwx_common=y
+          CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_luci-lib-jsonc=y
+          CONFIG_PACKAGE_luci-app-fwx-app-center=y
+          CONFIG_PACKAGE_luci-app-fwx-appfilter=y
+          CONFIG_PACKAGE_luci-app-fwx-dashboard=y
+          CONFIG_PACKAGE_luci-app-fwx-dashboard-setting=y
+          CONFIG_PACKAGE_luci-app-fwx-feature=y
+          CONFIG_PACKAGE_luci-app-fwx-firewall=y
+          CONFIG_PACKAGE_luci-app-fwx-mac-blacklist=y
+          CONFIG_PACKAGE_luci-app-fwx-macfilter=y
+          CONFIG_PACKAGE_luci-app-fwx-network=y
+          CONFIG_PACKAGE_luci-app-fwx-record=y
+          CONFIG_PACKAGE_luci-app-fwx-record-whitelist=y
+          CONFIG_PACKAGE_luci-app-fwx-resources=y
+          CONFIG_PACKAGE_luci-app-fwx-session-stat=y
+          CONFIG_PACKAGE_luci-app-fwx-system=y
+          CONFIG_PACKAGE_luci-app-fwx-traffic-stat=y
+          CONFIG_PACKAGE_luci-app-fwx-user=y
+          CONFIG_PACKAGE_luci-app-fwx-user-record=y
+          CONFIG_PACKAGE_luci-app-fwx-wireless=y
+          EOF
           python3 - <<'PY'
           KEEP = "nokia_xg-040g-md-ubi"
           CFG = ".config"
@@ -116,7 +198,25 @@ jobs:
           echo "--- enabled device profiles ---"
           grep -E '^CONFIG_TARGET.*DEVICE.*=y' .config || true
           echo "--- FCM feature packages enabled in .config ---"
-          grep -iE '^CONFIG_PACKAGE_.*(fwx|fanchm|oaf|appfilter)' .config || echo "  (none enabled)"
+          grep -iE '^CONFIG_PACKAGE_.*(fwx|fanchm)' .config || echo "  (none enabled)"
+          echo "--- assert core FCM packages survived defconfig ---"
+          missing=0
+          for p in kmod-fwx fwxd libfwx_common \
+                   luci-app-fwx-user luci-app-fwx-record luci-app-fwx-user-record \
+                   luci-app-fwx-traffic-stat luci-app-fwx-session-stat \
+                   luci-app-fwx-appfilter luci-app-fwx-macfilter \
+                   luci-app-fwx-dashboard luci-app-fwx-resources; do
+            if ! grep -q "^CONFIG_PACKAGE_$p=y" .config; then
+              echo "  MISSING: $p"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "FATAL: some FCM packages were dropped by make defconfig. Dumping related lines:"
+            grep -iE 'CONFIG_PACKAGE_.*(fwx|fanchm|luci-compat|luci-lib-jsonc)' .config || true
+            exit 1
+          fi
+          echo "  all core FCM packages enabled OK"
 
       - name: Download sources
         run: make download -j"$(nproc)"
@@ -124,16 +224,35 @@ jobs:
       - name: Build ${{ matrix.target }}
         run: make -j"$(nproc)"
 
+      - name: Verify FCM packages were actually built
+        run: |
+          echo "=== built FCM-related package files ==="
+          find bin -type f \( -iname '*fwx*' -o -iname 'kmod-fwx*' \) | sort | head -60
+          echo "=== assert kmod-fwx + fwxd packages exist ==="
+          kmod=$(find bin -type f -name 'kmod-fwx*' | head -1)
+          fwxd=$(find bin -type f -name 'fwxd*' | head -1)
+          luci=$(find bin -type f -name 'luci-app-fwx-*' | wc -l)
+          test -n "$kmod" || { echo "FATAL: kmod-fwx package not found"; exit 1; }
+          test -n "$fwxd" || { echo "FATAL: fwxd package not found"; exit 1; }
+          test "$luci" -ge 10 || { echo "FATAL: fewer than 10 luci-app-fwx-* packages built (got $luci)"; exit 1; }
+          echo "  kmod-fwx : $kmod"
+          echo "  fwxd     : $fwxd"
+          echo "  luci apps: $luci"
+
       - name: Pack ${{ matrix.target }} (XG-040G-MD only)
         run: |
-          mkdir -p release staging/an7581
+          mkdir -p release staging/an7581 staging/fcm-packages
           find bin/targets/airoha/an7581 -maxdepth 1 -type f \
             \( -name '*nokia_xg-040g-md-ubi*' -o -name 'sha256sums' -o -name 'profiles.json' \) \
             -exec cp {} staging/an7581/ \;
           echo "--- collected firmware files ---"
           ls -lh staging/an7581/
           test -n "$(ls -A staging/an7581)"
-          tar --zstd -cf "release/ponwrt-chm-xg-040g-md.tar.zst" -C staging an7581
+          find bin -type f \( -iname '*fwx*' -o -iname 'kmod-fwx*' \) \
+            -exec cp {} staging/fcm-packages/ \; 2>/dev/null || true
+          echo "--- collected FCM packages ---"
+          ls -lh staging/fcm-packages/ | head -30
+          tar --zstd -cf "release/ponwrt-chm-xg-040g-md.tar.zst" -C staging an7581 fcm-packages
           ls -lh release/
 
       - name: Upload ${{ matrix.target }}
