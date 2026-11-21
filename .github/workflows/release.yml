@@ -1,4 +1,4 @@
-name: Release PonWrt
+name: Release PonWrt-CHM (XG-040G-MD)
 
 on:
   workflow_dispatch:
@@ -31,7 +31,6 @@ jobs:
       matrix:
         target:
           - an7581
-          - an7583
 
     steps:
       - uses: actions/checkout@v6
@@ -80,12 +79,26 @@ jobs:
             openssl ec -in private-key.pem -pubout -out public-key.pem
           fi
 
-      - name: Configure ${{ matrix.target }}
+      - name: Configure ${{ matrix.target }} (XG-040G-MD only)
         run: |
           ./scripts/kconfig.pl + \
             "configs/${{ matrix.target }}.config" \
             configs/release.config > .config
+          python3 - <<'PY'
+          KEEP = "nokia_xg-040g-md-ubi"
+          CFG = ".config"
+          out = []
+          for line in open(CFG, encoding="utf-8").read().splitlines():
+              if line.startswith("CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_") and line.endswith("=y"):
+                  if KEEP not in line:
+                      out.append("# " + line[:-2] + " is not set")
+                      continue
+              out.append(line)
+          open(CFG, "w", encoding="utf-8").write("\n".join(out) + "\n")
+          PY
           make defconfig
+          echo "--- enabled device profiles ---"
+          grep -E '^CONFIG_TARGET.*DEVICE.*=y' .config || true
 
       - name: Download sources
         run: make download -j"$(nproc)"
@@ -93,16 +106,22 @@ jobs:
       - name: Build ${{ matrix.target }}
         run: make -j"$(nproc)"
 
-      - name: Pack ${{ matrix.target }}
+      - name: Pack ${{ matrix.target }} (XG-040G-MD only)
         run: |
-          mkdir release
-          tar --zstd -cf "release/ponwrt-${{ matrix.target }}.tar.zst" \
-            -C bin/targets/airoha "${{ matrix.target }}"
+          mkdir -p release staging/an7581
+          find bin/targets/airoha/an7581 -maxdepth 1 -type f \
+            \( -name '*nokia_xg-040g-md-ubi*' -o -name 'sha256sums' -o -name 'profiles.json' \) \
+            -exec cp {} staging/an7581/ \;
+          echo "--- collected firmware files ---"
+          ls -lh staging/an7581/
+          test -n "$(ls -A staging/an7581)"
+          tar --zstd -cf "release/ponwrt-chm-xg-040g-md.tar.zst" -C staging an7581
+          ls -lh release/
 
       - name: Upload ${{ matrix.target }}
         uses: actions/upload-artifact@v4
         with:
-          name: ponwrt-${{ matrix.target }}
+          name: ponwrt-chm-xg-040g-md
           path: release/*.tar.zst
           if-no-files-found: error
           retention-days: 7
