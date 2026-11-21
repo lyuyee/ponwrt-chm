@@ -100,6 +100,20 @@ jobs:
 
           echo "=== 5) kernel / source baseline ==="
           grep -n 'KERNEL_PATCHVER' target/linux/airoha/Makefile || true
+
+          echo "=== 5b) stage FanchmWrt nf_conn fwx_data patch into hack-6.18 ==="
+          mkdir -p target/linux/generic/hack-6.18
+          printf '%s' 'LS0tIGEvaW5jbHVkZS9uZXQvbmV0ZmlsdGVyL25mX2Nvbm50cmFjay5oCisrKyBiL2luY2x1ZGUvbmV0L25ldGZpbHRlci9uZl9jb25udHJhY2suaApAQCAtNjksNiArNjksMTYgQEAKIAogI2luY2x1ZGUgPG5ldC9uZXRmaWx0ZXIvaXB2NC9uZl9jb25udHJhY2tfaXB2NC5oPgogI2luY2x1ZGUgPG5ldC9uZXRmaWx0ZXIvaXB2Ni9uZl9jb25udHJhY2tfaXB2Ni5oPgorCitzdHJ1Y3QgbmZfZnd4X2RhdGF7CisJdTMyIG1hcms7CisJdTMyIGFwcF9pZDsKKwl1MzIgbWF0Y2hfc3RhdHVzOworCXU4IGFjdGlvbjsKKwl1OCBob3N0WzMyXTsKKwl2b2lkICp1c2VyX3B0cjsKKwlzdHJ1Y3QgbGlzdF9oZWFkIHNlc3Npb25fbm9kZTsKK307CiAKIHN0cnVjdCBuZl9jb25uIHsKIAkvKiBVc2FnZSBjb3VudCBpbiBoZXJlIGlzIDEgZm9yIGhhc2ggdGFibGUsIDEgcGVyIHNrYiwKQEAgLTExOSw2ICsxMjksOSBAQAogCS8qIEV4dGVuc2lvbnMgKi8KIAlzdHJ1Y3QgbmZfY3RfZXh0ICpleHQ7CiAKKwkvKiBGYW5jaG1XcnQgLyBGQ00gZGF0YSAqLworCXN0cnVjdCBuZl9md3hfZGF0YSBmd3hfZGF0YTsKKwogCS8qIFN0b3JhZ2UgcmVzZXJ2ZWQgZm9yIG90aGVyIG1vZHVsZXMsIG11c3QgYmUgdGhlIGxhc3QgbWVtYmVyICovCiAJdW5pb24gbmZfY29ubnRyYWNrX3Byb3RvIHByb3RvOwogfTsK' | base64 -d > target/linux/generic/hack-6.18/953-fwx-nf-conn-struct.patch
+          echo "--- staged patch ---"
+          cat target/linux/generic/hack-6.18/953-fwx-nf-conn-struct.patch
+          grep -q 'struct nf_fwx_data fwx_data;' target/linux/generic/hack-6.18/953-fwx-nf-conn-struct.patch || {
+            echo "FATAL: staged patch is missing the fwx_data field"; exit 1;
+          }
+          grep -q 'struct nf_fwx_data{' target/linux/generic/hack-6.18/953-fwx-nf-conn-struct.patch || {
+            echo "FATAL: staged patch is missing the struct definition"; exit 1;
+          }
+          echo "  fwx_data kernel patch staged OK"
+
           echo "  import complete"
 
       - name: Free build space
