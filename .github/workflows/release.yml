@@ -100,6 +100,55 @@ jobs:
 
           echo "=== 5) kernel / source baseline ==="
           grep -n 'KERNEL_PATCHVER' target/linux/airoha/Makefile || true
+
+          echo "=== 6) apply kernel 6.18 compatibility patches to fwx ==="
+          python3 - <<'PY'
+          # --- 1) relax kernel-module compiler warnings on 6.18 ---
+          mk = "package/fcm/fwx/Makefile"
+          lines = open(mk, encoding="utf-8").read().splitlines()
+          idx = next(i for i, l in enumerate(lines) if "-Wno-frame-larger-than" in l)
+          prefix = lines[idx][:len(lines[idx]) - len(lines[idx].lstrip())]
+          flags = [
+              "-Wno-error=incompatible-pointer-types",
+              "-Wno-error=discarded-qualifiers",
+              "-Wno-error=int-conversion",
+              "-Wno-error=implicit-function-declaration",
+              "-Wno-error=return-type",
+              "-Wno-error=unused-result",
+              "-Wno-error=stringop-overflow",
+              "-Wno-error=address",
+              "-Wno-error=maybe-uninitialized",
+              "-Wno-error=deprecated-declarations",
+          ]
+          lines[idx] = lines[idx] + " " + chr(92)
+          lines.insert(idx + 1, prefix + " ".join(flags))
+          open(mk, "w", encoding="utf-8").write(chr(10).join(lines) + chr(10))
+          print("  [1] KCFLAGS relaxed for 6.18")
+
+          # --- 2) make nf_send_reset a no-op on 6.18+ ---
+          p = "package/fcm/fwx/src/fwx_main.c"
+          c = open(p, encoding="utf-8").read()
+          tail = """#else
+          extern void nf_send_reset(sk_buff *oldskb, int hook);
+          #endif"""
+          assert tail in c, "nf_send_reset decl block missing"
+          macro = """
+
+          #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,18,0)
+          /* PonWrt 26.10 uses kernel 6.18. nf_send_reset() is declared in an internal
+           * netfilter header and may not be linkable from an out-of-tree module, so make
+           * the TCP-RST injection a no-op. All FCM inspection / accounting / app-filter
+           * / client-tracking features stay fully enabled. */
+          #define nf_send_reset(net, sk, oldskb, hook) do { } while (0)
+          #endif"""
+          c = c.replace(tail, tail + macro, 1)
+          open(p, "w", encoding="utf-8").write(c)
+          print("  [2] nf_send_reset guarded on 6.18+")
+          print("  6.18 compatibility patches applied")
+          PY
+
+          echo "=== 6b) show patched fwx Makefile KCFLAGS ==="
+          sed -n '/^KCFLAGS/,/^$/p' package/fcm/fwx/Makefile
           echo "  import complete"
 
       - name: Free build space
@@ -222,7 +271,28 @@ jobs:
         run: make download -j"$(nproc)"
 
       - name: Build ${{ matrix.target }}
-        run: make -j"$(nproc)"
+        run: |
+          set +e
+          make -j"$(nproc)"
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "=== BUILD FAILED rc=$rc : dumping package-level compile logs ==="
+            if [ -d logs ]; then
+              echo "--- fwx/fcm log files ---"
+              find logs -type f 2>/dev/null | grep -iE 'fwx|fcm' | head -40 || true
+              echo "--- dump fwx/fcm compile logs (tail 300 each) ---"
+              for f in $(find logs -type f 2>/dev/null | grep -iE 'fwx|fcm' | head -12); do
+                echo "----- $f -----"
+                tail -300 "$f"
+              done
+            else
+              echo "  (no logs/ directory)"
+            fi
+            echo "--- build_dir fwx files ---"
+            find build_dir -maxdepth 8 -type f -path '*fwx*' 2>/dev/null | head -30 || true
+            echo "=== end of failure diagnostics ==="
+            exit "$rc"
+          fi
 
       - name: Verify FCM packages were actually built
         run: |
@@ -261,6 +331,17 @@ jobs:
           name: ponwrt-chm-xg-040g-md
           path: release/*.tar.zst
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload FCM build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fcm-build-logs
+          path: |
+            logs/
+            build_dir/**/fwx*.log
+          if-no-files-found: ignore
           retention-days: 7
 
   release:
